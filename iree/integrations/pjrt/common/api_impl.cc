@@ -20,6 +20,11 @@ namespace iree::pjrt {
 
 const absl::string_view kMlirFormat = "mlir";
 
+  void IREE_PRINT_SCOPE_NAMED(std::string str) {
+    std::cout << std::this_thread::get_id() << " " << str << std::endl;
+    //printf("%d %s\n", getpid(), str.c_str());
+  }
+
 // Some general conversion functions for managing around some API layering
 // that is in flight. It is expected that most of this goes away over time.
 namespace PJRTApiConverter {
@@ -383,14 +388,14 @@ BufferInstance::BufferInstance(
 void BufferInstance::BindApi(PJRT_Api* api) {
   api->PJRT_Buffer_Destroy =
       +[](PJRT_Buffer_Destroy_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_Destroy");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_Destroy");
     BufferInstance* buffer = BufferInstance::Unwrap(args->buffer);
     delete buffer;
     return nullptr;
   };
   api->PJRT_Buffer_OnDeviceTrimmedShape =
       +[](PJRT_Buffer_OnDeviceTrimmedShape_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_OnDeviceTrimmedShape");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_OnDeviceTrimmedShape");
     auto impl = [&]() -> iree_status_t {
       // TODO: This function is terrible and not exposed properly to C.
       // It is slated to be deleted...
@@ -416,7 +421,7 @@ void BufferInstance::BindApi(PJRT_Api* api) {
   };
   api->PJRT_Buffer_ToHostBuffer =
       +[](PJRT_Buffer_ToHostBuffer_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_ToHostBuffer");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_ToHostBuffer");
     BufferInstance* buffer = BufferInstance::Unwrap(args->src);
     if (!args->dst) {
       // Size query.
@@ -427,10 +432,11 @@ void BufferInstance::BindApi(PJRT_Api* api) {
           buffer->CopyToHost(args->dst, args->dst_size,
                              reinterpret_cast<EventInstance**>(&args->event)));
     }
+    IREE_PRINT_SCOPE_NAMED("/PJRT_Buffer_ToHostBuffer");
   };
   api->PJRT_Buffer_OnDeviceSizeInBytes =
       +[](PJRT_Buffer_OnDeviceSizeInBytes_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_OnDeviceSizeInBytes");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_OnDeviceSizeInBytes");
     BufferInstance* buffer = BufferInstance::Unwrap(args->buffer);
     iree_device_size_t size =
         iree_hal_buffer_view_byte_length(buffer->buffer_view());
@@ -438,21 +444,21 @@ void BufferInstance::BindApi(PJRT_Api* api) {
     return nullptr;
   };
   api->PJRT_Buffer_Delete = +[](PJRT_Buffer_Delete_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_Delete");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_Delete");
     BufferInstance* buffer = BufferInstance::Unwrap(args->buffer);
     buffer->Delete();
     return nullptr;
   };
   api->PJRT_Buffer_IsDeleted =
       +[](PJRT_Buffer_IsDeleted_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_IsDeleted");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_IsDeleted");
     BufferInstance* buffer = BufferInstance::Unwrap(args->buffer);
     args->is_deleted = buffer->is_deleted();
     return nullptr;
   };
   api->PJRT_Buffer_CopyToDevice =
       +[](PJRT_Buffer_CopyToDevice_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_CopyToDevice");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_CopyToDevice");
     return MakeError(iree_make_status(IREE_STATUS_UNIMPLEMENTED,
                                       "PJRT_Buffer_CopyToDevice"));
   };
@@ -467,7 +473,7 @@ void BufferInstance::BindApi(PJRT_Api* api) {
   };
   api->PJRT_Buffer_ReadyEvent =
       +[](PJRT_Buffer_ReadyEvent_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Buffer_ReadyEvent");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Buffer_ReadyEvent");
     BufferInstance* buffer = BufferInstance::Unwrap(args->buffer);
     args->event =
         reinterpret_cast<PJRT_Event*>(new EventInstance(buffer->ready_fence()));
@@ -521,7 +527,7 @@ iree_status_t BufferInstance::CopyToHost(void* dst, iree_host_size_t dst_size,
     void* dst;
     size_t size;
     // Fence will be signaled when copy to host is complete.
-    iree_hal_fence_t* copy_done_fence;
+    iree_hal_fence_t *copy_done_fence;
   };
 
   //  Configure a default structure that writes directly to dst.
@@ -582,23 +588,36 @@ iree_status_t BufferInstance::CopyToHost(void* dst, iree_host_size_t dst_size,
       /*transfer_count=*/1, &transfer_command, &transfer_cb));
   dst_buffer.reset();
 
-  iree_hal_semaphore_t* semaphore;
+  iree_hal_semaphore_t *semaphore1;
   IREE_RETURN_IF_ERROR(
-      iree_hal_semaphore_create(device_.device(), 0ull, &semaphore));
+      iree_hal_semaphore_create(device_.device(), 0ull, &semaphore1));
+
+  iree_hal_semaphore_t* semaphore2;
+  IREE_RETURN_IF_ERROR(
+      iree_hal_semaphore_create(device_.device(), 0ull, &semaphore2));
 
   // Signaled when `dst_buffer` is ready to be consumed.
   iree_hal_fence_t* dst_buffer_ready_fence;
   IREE_RETURN_IF_ERROR(IreeApi::hal_fence_create_at(
-      semaphore, 1ull, device_.client().host_allocator(),
+						    semaphore1, 1ull, device_.client().host_allocator(),
       &dst_buffer_ready_fence));
 
   // Signaled when copy to host is complete.
   iree_hal_fence_t* copy_done_fence;
   IREE_RETURN_IF_ERROR(IreeApi::hal_fence_create_at(
-      semaphore, 2ull, device_.client().host_allocator(), &copy_done_fence));
+						    semaphore2, 2ull, device_.client().host_allocator(), &copy_done_fence));
+  iree_hal_fence_retain(copy_done_fence);
   copy_to_host_data->copy_done_fence = copy_done_fence;
 
+  uint64_t sem_val;
+  iree_hal_semaphore_query(semaphore2, &sem_val);
+  printf("sem2_val = %lu\n", sem_val);
+
+  iree_hal_semaphore_release(semaphore1);
+  iree_hal_semaphore_release(semaphore2);
+
   auto dst_buffer_callback = [](PJRT_Error* error, void* user_data) {
+    IREE_PRINT_SCOPE_NAMED("dst_buffer_callback");
     const ErrorInstance* error_instance = ErrorInstance::FromError(error);
     auto* copy_data = static_cast<CopyToHostData*>(user_data);
 
@@ -607,16 +626,20 @@ iree_status_t BufferInstance::CopyToHost(void* dst, iree_host_size_t dst_size,
       if (copy_data->alloc) {
         std::memcpy(copy_data->dst, copy_data->aligned, copy_data->size);
       }
+      IREE_PRINT_SCOPE_NAMED("Signal `copy_done_fence`");
       iree_hal_fence_signal(copy_data->copy_done_fence);
+      IREE_PRINT_SCOPE_NAMED("/Signal `copy_done_fence`");
     } else {
       iree_hal_fence_fail(copy_data->copy_done_fence, error_instance->status());
     }
 
+    iree_hal_fence_release(copy_data->copy_done_fence);
     if (copy_data->alloc) {
       delete[] static_cast<char*>(copy_data->alloc);
     }
     delete copy_data;
     delete error_instance;
+    IREE_PRINT_SCOPE_NAMED("/dst_buffer_callback");
   };
 
   // This callback simply deletes the `dst_buffer_ready_event`. We could perform
@@ -624,10 +647,13 @@ iree_status_t BufferInstance::CopyToHost(void* dst, iree_host_size_t dst_size,
   // callback thread of `dst_buffer_ready_event` detaching from the main thread,
   // potentially resulting in the callback thread outliving the main thread.
   auto copy_done_callback = [](PJRT_Error* error, void* user_data) {
+    IREE_PRINT_SCOPE_NAMED("copy_done_callback");
+    IREE_PRINT_SCOPE_NAMED(error ? "copy_done_callback error" : "copy_done_callback no error");
     EventInstance* dst_buffer_ready_event =
         static_cast<EventInstance*>(user_data);
     delete dst_buffer_ready_event;
     delete ErrorInstance::FromError(error);
+    IREE_PRINT_SCOPE_NAMED("/copy_done_callback");
   };
 
   auto dst_buffer_ready_event = new EventInstance(dst_buffer_ready_fence);
@@ -643,6 +669,8 @@ iree_status_t BufferInstance::CopyToHost(void* dst, iree_host_size_t dst_size,
       iree_hal_fence_semaphore_list(dst_buffer_ready_fence),
       /*command_buffer_count=*/1, &transfer_cb));
 
+  iree_hal_fence_release(dst_buffer_ready_fence);
+  iree_hal_fence_release(copy_done_fence);
   *out_done_event = copy_done_event;
   return iree_ok_status();
 }
@@ -1016,7 +1044,7 @@ void ClientInstance::BindApi(PJRT_Api* api) {
   // PJRT_Client_Create is polymorphic
   api->PJRT_Client_Destroy =
       +[](PJRT_Client_Destroy_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Client_Destroy");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Client_Destroy");
     delete ClientInstance::Unwrap(args->client);
     return nullptr;
   };
@@ -1070,7 +1098,7 @@ void ClientInstance::BindApi(PJRT_Api* api) {
   };
   api->PJRT_Client_Compile =
       +[](PJRT_Client_Compile_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Client_Compile");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Client_Compile");
     // TODO: It is not great that we only get a client here vs a list of
     // devices to consider (or something). The issue is that systems often
     // have unrelated devices that will not actually be scheduled and those
@@ -1110,7 +1138,7 @@ void ClientInstance::BindApi(PJRT_Api* api) {
   };
   api->PJRT_Client_BufferFromHostBuffer =
       +[](PJRT_Client_BufferFromHostBuffer_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Client_BufferFromHostBuffer");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Client_BufferFromHostBuffer");
     auto status =
         DeviceInstance::Unwrap(args->device)
             ->HostBufferToDevice(
@@ -1372,6 +1400,7 @@ std::tuple<uint64_t, uint64_t> ClientInstance::AdvanceTimeline() {
 //===----------------------------------------------------------------------===//
 
 EventInstance::EventInstance(iree_hal_fence_t* fence) : is_ready_(false) {
+  IREE_PRINT_SCOPE_NAMED("EventInstance");
   if (fence == nullptr) {
     is_ready_ = true;
     return;
@@ -1384,27 +1413,49 @@ EventInstance::EventInstance(iree_hal_fence_t* fence) : is_ready_(false) {
     // the fence is ready.
     signal_thread_ = std::make_unique<std::thread>(
         [](EventInstance* event_instance, iree_hal_fence_t* fence) {
-          iree_status_t wait_status =
-              iree_hal_fence_wait(fence, iree_infinite_timeout());
+	  IREE_PRINT_SCOPE_NAMED("iree_hal_fence_wait");
+	  iree_hal_semaphore_list_t list = iree_hal_fence_semaphore_list(fence);
+	  printf("list count: %lu fence count: %hu payload value: %lu\n", list.count, fence->count, list.payload_values[0]);
+	  auto sem = list.semaphores[0];
+	  uint64_t sem_val;
+	  iree_hal_semaphore_query(sem, &sem_val);
+	  printf("EventInstance before wait: sem_val = %lu\n", sem_val);
+          //iree_status_t wait_status =
+          //    iree_hal_fence_wait(fence, iree_infinite_timeout());
+	  iree_status_t wait_status = iree_hal_semaphore_wait(sem, list.payload_values[0], iree_infinite_timeout());
+	  iree_hal_semaphore_query(sem, &sem_val);
+	  printf("EventInstance after wait: sem_val = %lu\n", sem_val);
+	  IREE_PRINT_SCOPE_NAMED(iree_status_is_ok(wait_status) ? "EventInstance ok" : "EventInstance not ok");
+	  IREE_PRINT_SCOPE_NAMED("/iree_hal_fence_wait");
           iree_hal_fence_release(fence);
           event_instance->SignalReady(wait_status);
         },
         this, fence);
   }
+  IREE_PRINT_SCOPE_NAMED("/EventInstance");
 }
 
 EventInstance::~EventInstance() {
+  IREE_PRINT_SCOPE_NAMED("~EventInstance 1");
   std::lock_guard<std::mutex> guard(lock_);
+  IREE_PRINT_SCOPE_NAMED("~EventInstance 2");
   if (signal_thread_) {
+    IREE_PRINT_SCOPE_NAMED("~EventInstance 3");
     if (std::this_thread::get_id() != signal_thread_->get_id()) {
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 4");
       signal_thread_->join();
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 5");
     } else {
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 6");
       // An `EventInstance` is allowed to delete itself in one of its callbacks,
       // resulting in `signal_thread_` being the thread calling the destructor.
       // In such cases, we must let the thread continue running independent of
       // the destructor to avoid a deadlock.
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 7");
       signal_thread_->detach();
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 8");
       signal_thread_.release();
+      IREE_PRINT_SCOPE_NAMED("~EventInstance 9");
     }
   }
   iree_status_ignore(status_);
@@ -1412,28 +1463,30 @@ EventInstance::~EventInstance() {
 
 void EventInstance::BindApi(PJRT_Api* api) {
   api->PJRT_Event_Destroy = +[](PJRT_Event_Destroy_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Event_Destroy");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Event_Destroy");
     delete EventInstance::Unwrap(args->event);
+    IREE_PRINT_SCOPE_NAMED("/PJRT_Event_Destroy");
     return nullptr;
   };
   api->PJRT_Event_IsReady = +[](PJRT_Event_IsReady_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Event_IsReady");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Event_IsReady");
     args->is_ready = EventInstance::Unwrap(args->event)->is_ready();
     return nullptr;
   };
   api->PJRT_Event_Error = +[](PJRT_Event_Error_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Event_Error");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Event_Error");
     return (PJRT_Error*)EventInstance::Unwrap(args->event)->error();
   };
   api->PJRT_Event_Await = +[](PJRT_Event_Await_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Event_Await");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Event_Await");
     return MakeError(
         iree_make_status(IREE_STATUS_UNIMPLEMENTED, "PJRT_Event_Await"));
   };
   api->PJRT_Event_OnReady = +[](PJRT_Event_OnReady_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Event_OnReady");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Event_OnReady");
     return MakeError(EventInstance::Unwrap(args->event)
                          ->OnReady(args->callback, args->user_arg));
+    IREE_PRINT_SCOPE_NAMED("/PJRT_Event_OnReady");
   };
 }
 
@@ -1472,6 +1525,8 @@ iree_status_t EventInstance::OnReady(PJRT_Event_OnReadyCallback callback,
 
 void EventInstance::SignalReady(iree_status_t status) {
   IREE_TRACE_SCOPE();
+  IREE_PRINT_SCOPE_NAMED("SignalReady");
+  IREE_PRINT_SCOPE_NAMED(iree_status_is_ok(status) ? "is_ok" : "not_ok");
   iree_status_t local_status;
   std::vector<std::pair<PJRT_Event_OnReadyCallback, void*>> local_callbacks;
   {
@@ -1489,13 +1544,15 @@ void EventInstance::SignalReady(iree_status_t status) {
   // Note that the callback may destroy the event - so must only operate on
   // locals.
   for (auto& cb : local_callbacks) {
-    IREE_TRACE_SCOPE_NAMED("PJRT_User_Callback_Invoke");
+    IREE_PRINT_SCOPE_NAMED("PJRT_User_Callback_Invoke");
     cb.first(
         iree_status_is_ok(local_status)
             ? nullptr
             : (PJRT_Error*)new ErrorInstance(iree_status_clone(local_status)),
         cb.second);
+    IREE_PRINT_SCOPE_NAMED("/PJRT_User_Callback_Invoke");
   }
+  IREE_PRINT_SCOPE_NAMED("/SignalReady");
 }
 
 //===----------------------------------------------------------------------===//
@@ -1505,13 +1562,13 @@ void EventInstance::SignalReady(iree_status_t status) {
 void ExecutableImage::BindApi(PJRT_Api* api) {
   api->PJRT_Executable_Destroy =
       +[](PJRT_Executable_Destroy_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Executable_Destroy");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Executable_Destroy");
     ExecutableImage::Unwrap(args->executable)->DecRef();
     return nullptr;
   };
   api->PJRT_Executable_Name =
       +[](PJRT_Executable_Name_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED(PJRT_Executable_Name);
+    IREE_PRINT_SCOPE_NAMED("PJRT_Executable_Name");
     const char* dummy_name = "iree_vmfb";
     args->executable_name = dummy_name;
     args->executable_name_size = strlen(dummy_name);
@@ -1520,14 +1577,14 @@ void ExecutableImage::BindApi(PJRT_Api* api) {
   api->PJRT_Executable_SizeOfGeneratedCodeInBytes =
       +[](PJRT_Executable_SizeOfGeneratedCodeInBytes_Args* args)
       -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Executable_SizeOfGeneratedCodeInBytes");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Executable_SizeOfGeneratedCodeInBytes");
     args->size_in_bytes =
         ExecutableImage::Unwrap(args->executable)->binary->GetDataSize();
     return nullptr;
   };
   api->PJRT_Executable_NumOutputs =
       +[](PJRT_Executable_NumOutputs_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_Executable_NumOutputs");
+    IREE_PRINT_SCOPE_NAMED("PJRT_Executable_NumOutputs");
     auto* exec = ExecutableImage::Unwrap(args->executable);
     assert(exec->metadata_initialized);
     args->num_outputs = exec->result_count;
@@ -1591,7 +1648,7 @@ void ExecutableImage::BindApi(PJRT_Api* api) {
 void LoadedExecutableInstance::BindApi(PJRT_Api* api) {
   api->PJRT_LoadedExecutable_Destroy =
       +[](PJRT_LoadedExecutable_Destroy_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_LoadedExecutable_Destroy");
+    IREE_PRINT_SCOPE_NAMED("PJRT_LoadedExecutable_Destroy");
     delete LoadedExecutableInstance::Unwrap(args->executable);
     return nullptr;
   };
@@ -1606,25 +1663,25 @@ void LoadedExecutableInstance::BindApi(PJRT_Api* api) {
   };
   api->PJRT_LoadedExecutable_Delete =
       +[](PJRT_LoadedExecutable_Delete_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_LoadedExecutable_Delete");
+    IREE_PRINT_SCOPE_NAMED("PJRT_LoadedExecutable_Delete");
     return MakeError(iree_make_status(IREE_STATUS_UNIMPLEMENTED,
                                       "PJRT_LoadedExecutable_Delete"));
   };
   api->PJRT_LoadedExecutable_IsDeleted =
       +[](PJRT_LoadedExecutable_IsDeleted_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_LoadedExecutable_IsDeleted");
+    IREE_PRINT_SCOPE_NAMED("PJRT_LoadedExecutable_IsDeleted");
     return MakeError(iree_make_status(IREE_STATUS_UNIMPLEMENTED,
                                       "PJRT_LoadedExecutable_IsDeleted"));
   };
   api->PJRT_LoadedExecutable_Execute =
       +[](PJRT_LoadedExecutable_Execute_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_LoadedExecutable_Execute");
+    IREE_PRINT_SCOPE_NAMED("PJRT_LoadedExecutable_Execute");
     return MakeError(
         LoadedExecutableInstance::Unwrap(args->executable)->BatchExecute(args));
   };
   api->PJRT_LoadedExecutable_GetExecutable =
       +[](PJRT_LoadedExecutable_GetExecutable_Args* args) -> PJRT_Error* {
-    IREE_TRACE_SCOPE_NAMED("PJRT_LoadedExecutable_GetExecutable");
+    IREE_PRINT_SCOPE_NAMED("PJRT_LoadedExecutable_GetExecutable");
     auto* loaded_exe =
         LoadedExecutableInstance::Unwrap(args->loaded_executable);
     ExecutableImage* image = loaded_exe->image_;
