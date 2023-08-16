@@ -4,7 +4,19 @@ name: Build Packages
 
 on:
   workflow_call:
+  # Note: this workflow is typically invoked by schedule_candidate_release.yml.
   workflow_dispatch:
+    inputs:
+      package_version:
+        description: "Version of the package"
+        required: true
+        default: "0.1a1"
+      release_id:
+        description: "Release id to upload artifacts to"
+        default: ""
+      commit:
+        description: "Commit to check out"
+        default: ""
   pull_request:
   push:
     branches:
@@ -23,7 +35,12 @@ jobs:
     runs-on: ubuntu-20.04-64core
     steps:
       - name: "Checking out repository"
-        uses: actions/checkout@e2f20e631ae6d7dd3b768f56a5d2af784dd54791 # v2.5.0
+        uses: actions/checkout@8f4b7f84864484a7bf31766abe9204da3cbe65b3 # v3.5.0
+        with:
+          path: "c"  # Windows can hit path length limits, so use a short path.
+          submodules: true
+          ref: ${{ github.event.inputs.commit }}
+
 
       - id: "gcp-auth"
         name: "Authenticating to Google Cloud"
