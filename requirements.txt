@@ -1,5 +1,5 @@
 -f https://openxla.github.io/iree/pip-release-links.html
 -f https://storage.googleapis.com/jax-releases/jaxlib_nightly_releases.html
-iree-compiler==20230912.643
-jaxlib==0.4.16.dev20230912
+iree-compiler==20230913.644
+jaxlib==0.4.16.dev20230913
 -e ../jax
